@@ -126,6 +126,11 @@ b, strong { font-weight: 600; }
 .btn[aria-pressed="true"] { color: var(--hot); border-color: var(--hot); }
 .btn.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
 .toast { margin: 10px 0 0; min-height: 1.45em; font-size: 13px; color: var(--cold); }
+.btn.link { display: inline-flex; align-items: center; text-decoration: none; }
+.banner .err { display: block; margin-top: 5px; font: 11.5px/1.4 var(--font-mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.scanstat { margin: 0 0 8px; font: 12px/1.4 var(--font-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.hint { display: block; margin-top: 6px; font-size: 12.5px; color: var(--ink-3); }
+.setup a { color: var(--cold); }
 
 /* list */
 .list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -250,6 +255,7 @@ b, strong { font-weight: 600; }
       <button type="button" class="btn primary" id="scanBtn">Start scan</button>
       <button type="button" class="btn" id="beepBtn" aria-pressed="false">Sound off</button>
       <button type="button" class="btn" id="demoBtn">Demo</button>
+      <a class="btn link" id="openLive" href="https://liamcross-arch.github.io/phone-finder/" target="_blank" rel="noopener noreferrer">Open live version ↗</a>
     </div>
     <p class="toast" id="toast" role="status" aria-live="polite"></p>
   </section>
@@ -260,6 +266,7 @@ b, strong { font-weight: 600; }
       <span class="count" id="count"></span>
     </div>
     <label class="filter" for="hide"><input type="checkbox" id="hide" checked> <span>Hide non-phones: Apple, Windows, wearables and trackers</span></label>
+    <p class="scanstat" id="scanStat" hidden></p>
     <ul class="devs" id="devs"></ul>
     <p class="empty" id="empty">Signals show up here a few seconds after a scan starts. A typical home has 5 to 40.</p>
   </section>
@@ -276,7 +283,7 @@ b, strong { font-weight: 600; }
     <h3 class="label">If nothing climbs</h3>
     <ul class="facts">
       <li>A dead battery or Bluetooth switched off leaves nothing to hear. Find Hub still shows where the phone last checked in.</li>
-      <li>Some phones send few Bluetooth signals while idle. Stay longer at each spot, or ring it from Find Hub.</li>
+      <li>Many Android phones send few or no Bluetooth signals while idle with the screen off. If the list shows other devices but not the phone you're after, it isn't advertising, and ringing it from Find Hub is the way to find it.</li>
       <li>Phones change their Bluetooth address about every 15 minutes. The finder follows the change when the new signal looks the same. If the signal drops out, pick it again in the list.</li>
       <li>If this page won't run, the free nRF Connect app from the Play Store lists the same signals with live dBm.</li>
     </ul>
@@ -289,8 +296,10 @@ b, strong { font-weight: 600; }
       <li id="c1"><span class="st" aria-hidden="true">?</span><div><b>Chrome on an Android phone</b>, or Chrome on a laptop. iPhones can't scan Bluetooth from a web page.<span class="st-note"></span></div></li>
       <li id="c2"><span class="st" aria-hidden="true">?</span><div><b>Switch on Bluetooth scanning in Chrome.</b> Paste this into Chrome's address bar, set <i>Experimental Web Platform features</i> to Enabled, then tap Relaunch.
         <div class="flag"><code id="flag">chrome://flags/#enable-experimental-web-platform-features</code><button type="button" class="btn small" id="copyFlag">Copy</button></div><span class="st-note"></span></div></li>
-      <li id="c3"><span class="st" aria-hidden="true">?</span><div><b>Bluetooth and Location on.</b> Allow Chrome's Nearby devices and Location prompts.<span class="st-note"></span></div></li>
-      <li id="c4"><span class="st" aria-hidden="true">?</span><div><b>Open the page on its own https address</b>, not inside the Claude app or another viewer.<span class="st-note"></span></div></li>
+      <li id="c3"><span class="st" aria-hidden="true">?</span><div><b>Bluetooth and Location on.</b> Android usually returns nothing from a Bluetooth scan while Location is off. Allow Chrome's Nearby devices and Location prompts, or set them in Android Settings › Apps › Chrome › Permissions.
+        <div class="flag"><button type="button" class="btn small" id="pickerBtn">Test with Chrome's device picker</button></div>
+        <span class="hint">Chrome's own picker should list nearby devices. If it asks for a permission or says Bluetooth is off, fix that first.</span><span class="st-note"></span></div></li>
+      <li id="c4"><span class="st" aria-hidden="true">?</span><div><b>Open the page on its own https address</b>, not inside the Claude app or another viewer.<span id="liveWrap"> The live copy is at <a href="https://liamcross-arch.github.io/phone-finder/" target="_blank" rel="noopener noreferrer">liamcross-arch.github.io/phone-finder</a>.</span><span class="st-note"></span></div></li>
     </ol>
   </section>
 
@@ -427,7 +436,8 @@ b, strong { font-weight: 600; }
     targetKey: null, lockedAt: 0, relocks: 0,
     trace: [], disp: null,
     beep: false, hide: true,
-    scan: null, wake: null,
+    scan: null, wake: null, watch: null,
+    liveStart: 0, packets: 0, visCount: 0, hidCount: 0,
     order: [], lastOrder: 0, lastList: 0, pointerDown: false,
     flash: '', flashUntil: 0, preseeding: false
   };
@@ -542,6 +552,7 @@ b, strong { font-weight: 600; }
 
   function onAdv(e) {
     const t = performance.now();
+    S.packets++;
     const mfr = [], svc = [];
     let feaa = null;
     try { if (e.manufacturerData) e.manufacturerData.forEach((dv, id) => mfr.push(id)); } catch (err) { /* ignore */ }
@@ -567,7 +578,7 @@ b, strong { font-weight: 600; }
     if (n === 'SecurityError' && /gesture/i.test(m)) return 'Tap Start scan again. Chrome only starts a scan straight after a tap.';
     if (n === 'NotAllowedError' || n === 'SecurityError') return 'Scanning wasn’t allowed. Tap Start scan and choose Allow. If no prompt shows up, check this site’s permissions in Chrome.';
     if (n === 'InvalidStateError') return 'Bluetooth looks switched off. Turn on Bluetooth and Location on this phone, then try again.';
-    if (n === 'NotFoundError') return 'No Bluetooth radio found on this device.';
+    if (n === 'NotFoundError') return 'Chrome couldn’t reach Bluetooth. Turn on Bluetooth and Location, and check that Chrome is allowed <strong>Nearby devices</strong> and <strong>Location</strong> in Android Settings › Apps › Chrome › Permissions.';
     if (n === 'NotSupportedError') return 'This browser can’t scan for Bluetooth signals. Use Chrome with the switch in Run it live.';
     return 'The scan didn’t start: ' + esc(m || n || 'unknown error') + '.';
   }
@@ -586,11 +597,44 @@ b, strong { font-weight: 600; }
       S.scan = scan;
       navigator.bluetooth.addEventListener('advertisementreceived', onAdv);
       S.mode = 'live';
+      S.liveStart = performance.now(); S.packets = 0;
       S.flash = '';
       requestWake();
     } catch (err) {
       S.mode = 'ready';
-      setFlash(scanError(err), 9000);
+      setFlash(scanError(err) + rawError(err), 20000);
+    }
+    render(performance.now());
+  }
+
+  const rawError = (err) => '<span class="err">' + esc(((err && err.name) || 'Error') + ': ' + ((err && err.message) || '')) + '</span>';
+
+  // Chrome's own device picker: shows Chrome's guidance when Bluetooth or a permission is the problem,
+  // and gives a second way to track one device if scanning misbehaves.
+  async function pickerTest() {
+    if (!navigator.bluetooth || typeof navigator.bluetooth.requestDevice !== 'function') {
+      setFlash(esc(liveReason() || 'This browser has no Bluetooth picker.'), 9000);
+      render(performance.now());
+      return;
+    }
+    try {
+      const dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true });
+      const name = dev.name || 'an unnamed device';
+      if (typeof dev.watchAdvertisements === 'function') {
+        stopDemo(); stopLive(); clearAll();
+        S.watch = new AbortController();
+        dev.addEventListener('advertisementreceived', onAdv);
+        await dev.watchAdvertisements({ signal: S.watch.signal });
+        S.mode = 'live'; S.liveStart = performance.now(); S.packets = 0;
+        S.targetKey = dev.id; S.lockedAt = performance.now();
+        requestWake();
+        toast('Chrome can see Bluetooth devices. Tracking ' + name + '.');
+      } else {
+        toast('Chrome can see Bluetooth devices. You picked ' + name + '.');
+      }
+    } catch (err) {
+      if (err && err.name === 'NotFoundError' && /cancel/i.test(err.message || '')) toast('Picker closed without picking a device.');
+      else setFlash('Chrome’s picker reported a problem.' + rawError(err), 20000);
     }
     render(performance.now());
   }
@@ -598,6 +642,7 @@ b, strong { font-weight: 600; }
   function stopLive() {
     if (S.scan) { try { if (S.scan.active !== false) S.scan.stop(); } catch (e) { /* ignore */ } }
     S.scan = null;
+    if (S.watch) { try { S.watch.abort(); } catch (e) { /* ignore */ } S.watch = null; }
     if (navigator.bluetooth) { try { navigator.bluetooth.removeEventListener('advertisementreceived', onAdv); } catch (e) { /* ignore */ } }
     releaseWake();
     if (S.mode === 'live') S.mode = env.live ? 'ready' : 'off';
@@ -767,6 +812,13 @@ b, strong { font-weight: 600; }
     }
     if (S.mode === 'ready') return 'Ready. Stand near the middle of the home, then tap <strong>Start scan</strong>.';
     if (S.mode === 'live') {
+      const ran = now - S.liveStart;
+      if (!d && S.packets === 0 && ran > 8000) {
+        return '<span class="tag">Nothing heard</span>No Bluetooth signals in ' + Math.round(ran / 1000) + ' s. Android usually returns nothing while <strong>Location</strong> is off. Check that Bluetooth and Location are on and that Chrome is allowed <strong>Nearby devices</strong> and <strong>Location</strong> (Android Settings › Apps › Chrome › Permissions), then tap Stop scan and Start scan.';
+      }
+      if (!d && S.packets > 0 && S.visCount === 0 && S.hidCount > 0) {
+        return 'Hearing ' + S.hidCount + ' device' + (S.hidCount > 1 ? 's' : '') + ', all hidden as non-phones. Untick the filter to see them.';
+      }
       if (!d) return 'Scanning. Walk slowly, then tap the signal that climbs as you get closer.';
       const gap = now - d.lastSeen;
       if (gap > LOST_MS) return 'Lost the signal ' + Math.round(gap / 1000) + ' s ago. Stand still for a few seconds. If it doesn’t come back, pick it again in the list.';
@@ -873,6 +925,14 @@ b, strong { font-weight: 600; }
     });
     $('empty').hidden = order.length > 0;
     setText('count', order.length ? order.length + ' shown' + (hidden ? ' · ' + hidden + ' hidden' : '') : (hidden ? hidden + ' hidden' : ''));
+    S.visCount = order.length; S.hidCount = hidden;
+    const st = $('scanStat');
+    st.hidden = S.mode !== 'live';
+    if (S.mode === 'live') {
+      const secs = Math.max(0, Math.round((now - S.liveStart) / 1000));
+      setText('scanStat', (S.watch ? 'Watching one device ' : 'Scan running ') + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') +
+        ' · ' + S.packets + ' packets · ' + S.devices.size + ' device' + (S.devices.size === 1 ? '' : 's'));
+    }
   }
 
   function makeRow(key) {
@@ -997,8 +1057,9 @@ b, strong { font-weight: 600; }
     nt.textContent = note || '';
   }
   async function renderChecks() {
+    const chromeVer = (/Chrome\/(\d+)/.exec(navigator.userAgent || '') || [])[1];
     setCheck('c1', env.ios ? 'bad' : env.hasBT ? 'ok' : 'bad',
-      env.ios ? 'This is an iPhone or iPad.' : env.hasBT ? 'This browser has Web Bluetooth.' : 'This browser has no Web Bluetooth.');
+      env.ios ? 'This is an iPhone or iPad.' : env.hasBT ? 'This browser has Web Bluetooth' + (chromeVer ? ' (Chrome ' + chromeVer + ').' : '.') : 'This browser has no Web Bluetooth.');
     setCheck('c2', env.hasScan ? 'ok' : env.hasBT ? 'bad' : 'na',
       env.hasScan ? 'Scanning is switched on in this browser.' : env.hasBT ? 'Scanning is switched off in this browser.' : '');
     setCheck('c3', 'unknown', 'A web page can’t check Location; Chrome asks when you start a scan.');
@@ -1030,6 +1091,10 @@ b, strong { font-weight: 600; }
     render(performance.now());
   });
   $('beepBtn').addEventListener('click', () => setBeep(!S.beep));
+  $('pickerBtn').addEventListener('click', pickerTest);
+  const onLiveSite = location.hostname === 'liamcross-arch.github.io';
+  $('openLive').hidden = onLiveSite;
+  $('liveWrap').hidden = onLiveSite;
   $('hide').addEventListener('change', (e) => { S.hide = e.target.checked; S.lastOrder = 0; S.lastList = 0; render(performance.now()); });
 
   const list = $('devs');
